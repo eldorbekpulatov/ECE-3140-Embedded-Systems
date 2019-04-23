@@ -22,7 +22,7 @@ struct process_state {
 };
 
 // initialize fields 
-realtime_t current_time;
+realtime_t current_time = {0, 0};
 process_t *current_process = NULL;
 
 process_t *process_queue_head   	 = NULL;
@@ -46,7 +46,7 @@ void process_free(process_t *proc) {
 /*  PIT Interrupt Handler  */
 void PIT1_IRQHandler(void) {
 	NVIC_DisableIRQ(PIT1_IRQn); //disable timer
-	PIT->CHANNEL[0].TFLG = PIT_TFLG_TIF_MASK;	//reset TFLG
+	PIT->CHANNEL[1].TFLG = 0x1;	//reset TFLG
 	current_time.msec++;
 	if ( current_time.msec == 1000 ) {
 		current_time.msec = 0;
@@ -64,21 +64,24 @@ void process_start() {
 	SIM->SCGC6 = SIM_SCGC6_PIT_MASK;  
 	//enable timer and interrupt
 	PIT->MCR = (0<<1);
-	// Set load value of zeroth PIT
-	PIT->CHANNEL[0].LDVAL = 0x10000;  
-	PIT->CHANNEL[0].TCTRL = 3;
-	// set first PIT for real time
-	PIT->CHANNEL[1].LDVAL = DEFAULT_SYSTEM_CLOCK/1000;
-	PIT->CHANNEL[1].TCTRL = 3;
-	// enable PIT0/PIT1 Interrupts
+	PIT->CHANNEL[0].LDVAL = DEFAULT_SYSTEM_CLOCK / 10;
+	PIT->CHANNEL[1].LDVAL = DEFAULT_SYSTEM_CLOCK / 1000;
 	NVIC_EnableIRQ(PIT0_IRQn);
-  NVIC_EnableIRQ(PIT1_IRQn);	
-	// init current_time
-	current_time.msec = 0;
-	current_time.sec = 0;
-	// call process begin to start
-	process_begin();
-	return;
+	NVIC_EnableIRQ(PIT1_IRQn);
+	NVIC_EnableIRQ(SVCall_IRQn);
+	// Don't enable the timer yet.
+	PIT->CHANNEL[1].TCTRL = 3; 
+	NVIC_SetPriority(PIT1_IRQn,0);
+	NVIC_SetPriority(SVCall_IRQn,1);
+	NVIC_SetPriority(PIT0_IRQn,2);
+	
+	if (!process_queue_head && !rt_ready_queue_head && !rt_unready_queue_head ) {
+		// Bail out fast if no processes were ever created
+		return;
+	}else{
+		// call process begin to start
+		process_begin();
+	}
 };
 
 
@@ -152,7 +155,7 @@ void enqueue_ready(process_t *proc){
 /* ENQUEUE */
 void enqueue(process_t *proc) {
 	if (proc->rt){ // real-time
-		if(getVal(&current_time)<getStart(proc)){ // unready, sort by arrival
+		if(getVal(&current_time) < getStart(proc)){ // unready, sort by arrival
 			enqueue_unready(proc);
 		}else{ // ready, sort by deadline
 			enqueue_ready(proc);
@@ -245,26 +248,39 @@ int process_rt_create(void (*f)(void), int n, realtime_t* start, realtime_t* dea
  * ready process. 
  */
 unsigned int * process_select (unsigned int * cursp) { // TODO: modify to support real-time
-	if (cursp) {
-		// Suspending a process which has not yet finished, save state and make it the tail
-		current_process->sp = cursp;
-		enqueue(current_process);
-
-	} else {
-		// Check if a process was running, free its resources if one just finished
-		if (current_process) {
-			process_free(current_process);
+	
+	// take ready processes off unready queue and move them to ready queue
+	while (rt_unready_queue_head != NULL && getStart(rt_unready_queue_head) < getVal(&current_time)) {
+			enqueue_ready(dequeue(rt_unready_queue_head, rt_unready_queue_tail));
+	}
+	
+	if (cursp) { // process has not finished
+		current_process->sp = cursp; // save the state
+		enqueue(current_process); // re-enqueue
+	} 
+	else { // process has finished
+		if (current_process) { // process was running 
+			if (current_process->rt){ // real-time
+				if (getDeadline(current_process) > getVal(&current_time)){ // met the deadline
+					process_deadline_met +=1;
+				}
+				else{ // did not meet the deadline
+					process_deadline_miss +=1;
+				}
+			}
+			process_free(current_process);  // free the space
 		}
 	}
 	
-	// Select the new current process from the front of the queue
-	current_process = dequeue(process_queue_head, process_queue_tail);
+	if (rt_ready_queue_head){ //  ready processes exist
+		current_process = dequeue(rt_ready_queue_head, rt_ready_queue_tail); 
+	}else{ //  no ready processes
+		current_process = dequeue(process_queue_head, process_queue_tail);
+	}
 	
-	if (current_process) {
-		// Launch the process which was just popped off the queue
-		return current_process->sp;
-	} else {
-		// No process was selected, exit the scheduler
-		return NULL;
+	if (current_process) { // process was selected
+		return current_process->sp; // Launch the process which was just popped off the queue
+	} else { // no process was selected
+		return NULL;  // exit the scheduler
 	}
 }

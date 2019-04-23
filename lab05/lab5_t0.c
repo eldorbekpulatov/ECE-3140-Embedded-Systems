@@ -63,7 +63,6 @@ void pNRT(void) {
 	LEDRed_Toggle();
 	shortDelay();
 	}
-	
 }
 
 /*-------------------
@@ -88,11 +87,11 @@ int main(void) {
 	 
 	LED_Initialize();
 
-    /* Create processes */ 
-    if (process_create(pNRT, NRT_STACK) < 0) { return -1; }
-    if (process_rt_create(pRT1, RT_STACK, &t_pRT1, &t_1msec) < 0) { return -1; } 
-   
-    /* Launch concurrent execution */
+	/* Create processes */ 
+	if (process_create(pNRT, NRT_STACK) < 0) { return -1; }
+	if (process_rt_create(pRT1, RT_STACK, &t_pRT1, &t_1msec) < 0) { return -1; } 
+ 
+	/* Launch concurrent execution */
 	process_start();
 
   LED_Off();
