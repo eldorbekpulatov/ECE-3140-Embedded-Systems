@@ -1,7 +1,7 @@
-#include "3140_concur.h"
-#include "realtime.h" 
 #include <stdlib.h>
 #include <fsl_device_registers.h> 
+#include "3140_concur.h"
+#include "realtime.h" 
 
 // process state is PCB and represents node on LL 
 struct process_state {
@@ -37,55 +37,13 @@ int process_deadline_met  = 0;
 int process_deadline_miss = 0;
 
 
+// HELPER FUNCTIONS
 /* Frees space of a given proc */
 void process_free(process_t *proc) {
 	process_stack_free(proc->orig_sp, proc->size);
 	free(proc);
 }
 
-/*  PIT Interrupt Handler  */
-void PIT1_IRQHandler(void) {
-	NVIC_DisableIRQ(PIT1_IRQn); //disable timer
-	PIT->CHANNEL[1].TFLG = 0x1;	//reset TFLG
-	current_time.msec++;
-	if ( current_time.msec == 1000 ) {
-		current_time.msec = 0;
-		current_time.sec++;
-	}
-	NVIC_EnableIRQ(PIT1_IRQn); //enable timer and interrupt		
-};
-
-/*
- * This function sets up a period interrupt to be generated using the PIT[0] interrupt.
- * It ends with a call to process_begin(), which initiates the first process.
- */
-void process_start() {
-	// Enable clock to PIT module
-	SIM->SCGC6 = SIM_SCGC6_PIT_MASK;  
-	//enable timer and interrupt
-	PIT->MCR = (0<<1);
-	PIT->CHANNEL[0].LDVAL = DEFAULT_SYSTEM_CLOCK / 10;
-	PIT->CHANNEL[1].LDVAL = DEFAULT_SYSTEM_CLOCK / 1000;
-	NVIC_EnableIRQ(PIT0_IRQn);
-	NVIC_EnableIRQ(PIT1_IRQn);
-	NVIC_EnableIRQ(SVCall_IRQn);
-	// Don't enable the timer yet.
-	PIT->CHANNEL[1].TCTRL = 3; 
-	NVIC_SetPriority(PIT1_IRQn,0);
-	NVIC_SetPriority(SVCall_IRQn,1);
-	NVIC_SetPriority(PIT0_IRQn,2);
-	
-	if (!process_queue_head && !rt_ready_queue_head && !rt_unready_queue_head ) {
-		// Bail out fast if no processes were ever created
-		return;
-	}else{
-		// call process begin to start
-		process_begin();
-	}
-};
-
-
-// helper functions
 unsigned int getVal(realtime_t *time){
 	return (time->sec*1000)+(time->msec);
 };
@@ -98,7 +56,6 @@ unsigned int getDeadline(process_t *proc){
 
 /* enqueues besed on START time */
 void enqueue_unready(process_t *proc){
-	proc->next = NULL; // clean the node
 	if(!rt_unready_queue_head){ // unready queue empty
 		rt_unready_queue_head = proc;
 		rt_unready_queue_tail = proc;
@@ -126,11 +83,10 @@ void enqueue_unready(process_t *proc){
 
 /* enqueues besed on DEADLINE time */
 void enqueue_ready(process_t *proc){
-	proc->next = NULL; // clean the node
-	if(!rt_ready_queue_head){ // unready queue empty
+	if(!rt_ready_queue_head){ // ready queue empty
 		rt_ready_queue_head = proc;
 		rt_ready_queue_tail = proc;
-	}else{ // unready queue not empty
+	}else{ // ready queue not empty
 		if (!rt_ready_queue_head->next){ //one process in queue
 			if (getDeadline(proc) > getDeadline(rt_ready_queue_head)){
 				rt_ready_queue_head->next = proc;
@@ -173,15 +129,52 @@ void enqueue(process_t *proc) {
 }
 
 /* DEQUEUE  */
-process_t* dequeue(process_t *queue_head, process_t *queue_tail) {
-	if (!queue_head) return NULL;
-	process_t *proc = queue_head;
-	queue_head = proc->next;
-	if (queue_tail == proc) {
-		queue_tail = NULL;
+process_t* dequeue(process_t **queue_head, process_t **queue_tail) {
+	if ((*queue_head) == NULL) return NULL;
+	process_t * proc = *queue_head;
+	(*queue_head) = (*queue_head)->next;
+	if ((*queue_tail) == proc) {
+		(*queue_tail) = NULL;
 	}
-	proc->next = NULL;
-	return proc;
+	(proc)->next = NULL;
+	return (proc);
+};
+
+/*
+ * This function sets up a period interrupt to be generated using the PIT[0] interrupt.
+ * It ends with a call to process_begin(), which initiates the first process.
+ */
+void process_start() {
+	SIM->SCGC6 |= SIM_SCGC6_PIT_MASK;
+	PIT->MCR = 0;
+	PIT->CHANNEL[0].LDVAL = DEFAULT_SYSTEM_CLOCK / 10;
+	PIT->CHANNEL[1].LDVAL = DEFAULT_SYSTEM_CLOCK / 1000;
+	NVIC_EnableIRQ(PIT0_IRQn);
+	NVIC_EnableIRQ(PIT1_IRQn);
+	NVIC_EnableIRQ(SVCall_IRQn);
+	NVIC_SetPriority(PIT1_IRQn,0);
+	NVIC_SetPriority(SVCall_IRQn,1);
+	NVIC_SetPriority(PIT0_IRQn,2);
+	
+	// Don't enable the timer yet.
+	PIT->CHANNEL[1].TCTRL = 3; 
+	if (!process_queue_head && !rt_ready_queue_head && !rt_unready_queue_head ) {
+		return; // Bail out 
+	}else{
+		process_begin(); // call process begin to start
+	}
+};
+
+/*  PIT Interrupt Handler  */
+void PIT1_IRQHandler(void) {
+	NVIC_DisableIRQ(PIT1_IRQn); //disable timer
+	PIT->CHANNEL[1].TFLG = 0x1;	//reset TFLG
+	current_time.msec++;
+	if ( current_time.msec == 1000 ) {
+		current_time.msec = 0;
+		current_time.sec++;
+	}
+	NVIC_EnableIRQ(PIT1_IRQn); //enable timer and interrupt		
 };
 
 
@@ -247,19 +240,14 @@ int process_rt_create(void (*f)(void), int n, realtime_t* start, realtime_t* dea
  * if there is a ready process, this returns the value of the stack pointer for the next 
  * ready process. 
  */
-unsigned int * process_select (unsigned int * cursp) { // TODO: modify to support real-time
-	
-	// take ready processes off unready queue and move them to ready queue
-	while (rt_unready_queue_head != NULL && getStart(rt_unready_queue_head) < getVal(&current_time)) {
-			enqueue_ready(dequeue(rt_unready_queue_head, rt_unready_queue_tail));
-	}
-	
+unsigned int * process_select (unsigned int * cursp) {
 	if (cursp) { // process has not finished
 		current_process->sp = cursp; // save the state
 		enqueue(current_process); // re-enqueue
 	} 
 	else { // process has finished
 		if (current_process) { // process was running 
+			
 			if (current_process->rt){ // real-time
 				if (getDeadline(current_process) > getVal(&current_time)){ // met the deadline
 					process_deadline_met +=1;
@@ -272,15 +260,25 @@ unsigned int * process_select (unsigned int * cursp) { // TODO: modify to suppor
 		}
 	}
 	
-	if (rt_ready_queue_head){ //  ready processes exist
-		current_process = dequeue(rt_ready_queue_head, rt_ready_queue_tail); 
-	}else{ //  no ready processes
-		current_process = dequeue(process_queue_head, process_queue_tail);
+	if ( rt_unready_queue_head && !rt_ready_queue_head && !process_queue_head) {
+		NVIC_EnableIRQ(PIT1_IRQn);
+		while(getVal(&current_time) <= getStart(rt_unready_queue_head)){} // wait
+		NVIC_DisableIRQ(PIT1_IRQn);
+	}
+	// take ready processes off unready queue and move them to ready queue
+	while (rt_unready_queue_head && (getStart(rt_unready_queue_head) <= getVal(&current_time))) {
+		enqueue_ready(dequeue(&rt_unready_queue_head, &rt_unready_queue_tail));
 	}
 	
+	if (rt_ready_queue_head){ //  yes ready process
+		current_process = dequeue(&rt_ready_queue_head, &rt_ready_queue_tail); 
+	}else{ //  no ready, yes nrt process
+		current_process = dequeue(&process_queue_head, &process_queue_tail);
+	}
+
 	if (current_process) { // process was selected
-		return current_process->sp; // Launch the process which was just popped off the queue
-	} else { // no process was selected
+		return current_process->sp; // launch the newly selected process 
+	}else { // no process was selected
 		return NULL;  // exit the scheduler
 	}
 }

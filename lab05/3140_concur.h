@@ -47,8 +47,8 @@ unsigned int * process_select (unsigned int * cursp);
     otherwise it must point to the process_t of the currently running process
 */
 extern process_t * current_process; 
-extern process_t * process_queue;
-extern process_t * process_tail;
+extern process_t * process_queue_head;
+extern process_t * process_queue_tail;
 
 /* Starts up the concurrent execution */
 void process_start (void);
