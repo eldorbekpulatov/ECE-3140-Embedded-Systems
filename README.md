@@ -7,8 +7,5 @@
 | Lab 03 |        Concurrency        |
 | Lab 04 |    Locks & Conditions     |
 | Lab 05 |    Real-Time Scheduling   |
-| Lab 06 |    Final Project - CNC    |
-|   ino  |   Arduino version of CNC  |
-
-
-
+| Lab 06 |    Final Project - CNC    | https://www.youtube.com/watch?v=Z8gxHZzyqMM  
+|   ino  |   Arduino version of CNC  | https://www.youtube.com/shorts/0SlnbboaLS8  
